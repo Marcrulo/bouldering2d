@@ -111,7 +111,7 @@ class Renderer:
         r_foot_world = ep.right_foot.copy()
 
         arm_l2 = player_cfg.lower_arm_length + player_cfg.hand_length
-        leg_l2 = player_cfg.lower_leg_length + player_cfg.foot_length
+        leg_l2 = player_cfg.lower_leg_length
 
         if ctx.contacts.state.left_hand is not None:
             target = np.array([ctx.contacts.state.left_hand.x, ctx.contacts.state.left_hand.y], dtype=np.float32)
@@ -127,13 +127,13 @@ class Renderer:
 
         if ctx.contacts.state.left_foot is not None:
             target = np.array([ctx.contacts.state.left_foot.x, ctx.contacts.state.left_foot.y], dtype=np.float32)
-            solved = self._solve_two_link(pelvis_world, l_knee_world, target, player_cfg.upper_leg_length, leg_l2)
+            solved = self._solve_two_link(pelvis_world, l_knee_world, target, player_cfg.upper_leg_length, player_cfg.lower_leg_length)
             if solved is not None:
                 l_knee_world, l_foot_world = solved
 
         if ctx.contacts.state.right_foot is not None:
             target = np.array([ctx.contacts.state.right_foot.x, ctx.contacts.state.right_foot.y], dtype=np.float32)
-            solved = self._solve_two_link(pelvis_world, r_knee_world, target, player_cfg.upper_leg_length, leg_l2)
+            solved = self._solve_two_link(pelvis_world, r_knee_world, target, player_cfg.upper_leg_length, player_cfg.lower_leg_length)
             if solved is not None:
                 r_knee_world, r_foot_world = solved
 

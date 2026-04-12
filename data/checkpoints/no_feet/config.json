@@ -1,6 +1,6 @@
 {
   "total_timesteps": 300000,
-  "eval_interval": 100000,
+  "eval_interval": 50000,
   "eval_episodes": 2,
   "checkpoint_interval": 25000,
   "learning_rate": 0.0003,

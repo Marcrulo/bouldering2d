@@ -18,23 +18,19 @@ JOINT_ORDER = [
     "r_hip",
     "l_knee",
     "r_knee",
-    "l_ankle",
-    "r_ankle",
 ]
 
 JOINT_LIMITS = {
     "neck": (-0.6, 0.6),
     "spine": (-0.5, 0.6),
-    "l_shoulder": (-2.6, 1.1),
-    "r_shoulder": (-1.1, 2.6),
+    "l_shoulder": (-2.6, 0.0),
+    "r_shoulder": (0.0, 2.6),
     "l_elbow": (-2.6, -0.1),
     "r_elbow": (0.1, 2.6),
-    "l_hip": (-1.5, 1.1),
-    "r_hip": (-1.1, 1.5),
-    "l_knee": (0.0, 2.5),
-    "r_knee": (0.0, 2.5),
-    "l_ankle": (-0.9, 0.7),
-    "r_ankle": (-0.7, 0.9),
+    "l_hip": (-1.5, -0.3),
+    "r_hip": (0.3, 1.5),
+    "l_knee": (0.0, 2.0),
+    "r_knee": (0.0, 2.0),
 }
 
 
@@ -72,12 +68,10 @@ class PlayerModel:
         self.joint_angles["r_shoulder"] = 1.4
         self.joint_angles["l_elbow"] = -1.2
         self.joint_angles["r_elbow"] = 1.2
-        self.joint_angles["l_hip"] = -0.2
-        self.joint_angles["r_hip"] = 0.2
+        self.joint_angles["l_hip"] = -0.3
+        self.joint_angles["r_hip"] = 0.3
         self.joint_angles["l_knee"] = 0.6
         self.joint_angles["r_knee"] = 0.6
-        self.joint_angles["l_ankle"] = 0.0
-        self.joint_angles["r_ankle"] = 0.0
 
     def reset(self, x: float = 4.0, y: float = 0.8) -> None:
         self.pelvis[:] = (x, y)
@@ -133,14 +127,10 @@ class PlayerModel:
         r_thigh_angle = -np.pi / 2 + self.joint_angles["r_hip"]
         l_knee = pelvis + self._vec(l_thigh_angle, self.config.upper_leg_length)
         r_knee = pelvis + self._vec(r_thigh_angle, self.config.upper_leg_length)
-        l_shin_angle = l_thigh_angle - self.joint_angles["l_knee"]
+        l_shin_angle = l_thigh_angle + self.joint_angles["l_knee"]
         r_shin_angle = r_thigh_angle - self.joint_angles["r_knee"]
-        l_ankle = l_knee + self._vec(l_shin_angle, self.config.lower_leg_length)
-        r_ankle = r_knee + self._vec(r_shin_angle, self.config.lower_leg_length)
-        l_foot_angle = l_shin_angle + self.joint_angles["l_ankle"]
-        r_foot_angle = r_shin_angle + self.joint_angles["r_ankle"]
-        l_foot = l_ankle + self._vec(l_foot_angle, self.config.foot_length)
-        r_foot = r_ankle + self._vec(r_foot_angle, self.config.foot_length)
+        l_foot = l_knee + self._vec(l_shin_angle, self.config.lower_leg_length)
+        r_foot = r_knee + self._vec(r_shin_angle, self.config.lower_leg_length)
 
         return LimbEndpoints(
             head=head,

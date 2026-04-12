@@ -31,7 +31,6 @@ class PlayerConfig:
     hand_length: float = 0.10
     upper_leg_length: float = 0.52
     lower_leg_length: float = 0.52
-    foot_length: float = 0.15
     joint_torque_scale: float = 5.0
     joint_damping: float = 0.92
     pelvis_drag: float = 0.85
