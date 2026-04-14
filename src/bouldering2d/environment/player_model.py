@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from bouldering2d.config import PlayerConfig
+
+if TYPE_CHECKING:
+    from bouldering2d.environment.muscle import JointActionResult, MuscleModel
 
 
 JOINT_ORDER = [
@@ -79,10 +83,15 @@ class PlayerModel:
         self.joint_velocities = {name: 0.0 for name in JOINT_ORDER}
         self._set_rest_pose()
 
-    def apply_joint_actions(self, actions: np.ndarray, dt: float) -> float:
-        efforts = 0.0
+    def apply_joint_actions(
+        self, actions: np.ndarray, dt: float, muscle_model: "MuscleModel"
+    ) -> "JointActionResult":
+        from bouldering2d.environment.muscle import JointActionResult
+        joint_torques: dict = {}
+        total_effort = 0.0
         for idx, name in enumerate(JOINT_ORDER):
-            torque = float(actions[idx]) * self.config.joint_torque_scale
+            torque = float(actions[idx]) * muscle_model.effective_torque_scale(name, self.joint_angles[name])
+            joint_torques[name] = torque
             self.joint_velocities[name] = (
                 self.joint_velocities[name] * self.config.joint_damping + torque * dt
             )
@@ -94,8 +103,8 @@ class PlayerModel:
             elif self.joint_angles[name] > hi:
                 self.joint_angles[name] = hi
                 self.joint_velocities[name] = 0.0
-            efforts += abs(torque)
-        return efforts
+            total_effort += abs(torque)
+        return JointActionResult(joint_torques=joint_torques, total_effort=total_effort)
 
     def update_pelvis(self, acceleration: np.ndarray, dt: float) -> None:
         self.pelvis_velocity += acceleration.astype(np.float32) * dt

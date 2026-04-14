@@ -30,8 +30,8 @@ class ContactManager:
 
     def update(self, grip_actions: np.ndarray, endpoints: LimbEndpoints, holds: HoldField) -> int:
         new_contacts = 0
-        attach_distance = self.player_config.attach_radius * 0.7
-        release_distance = self.player_config.attach_radius * 1.2
+        attach_distance = self.player_config.attach_radius
+        release_distance = self.player_config.contact_release_dist
         grip_map = {
             "left_hand": (float(grip_actions[0]), endpoints.left_hand),
             "right_hand": (float(grip_actions[1]), endpoints.right_hand),
@@ -40,7 +40,7 @@ class ContactManager:
         }
 
         for limb, (cmd, point) in grip_map.items():
-            if cmd < -0.4:
+            if cmd < -0.3:
                 setattr(self.state, limb, None)
                 continue
 
@@ -50,7 +50,7 @@ class ContactManager:
                     setattr(self.state, limb, None)
                 continue
 
-            if cmd <= 0.4:
+            if cmd <= 0.3:
                 continue
 
             nearest = self._find_reachable_hold(point, holds, attach_distance)
@@ -84,6 +84,34 @@ class ContactManager:
             ],
             dtype=np.float32,
         )
+
+    def as_position_obs(self, pelvis: np.ndarray) -> np.ndarray:
+        """Return the hold position (relative to pelvis) for each limb, or (0,0) if not attached.
+
+        Gives the agent spatial awareness of where its current contacts are,
+        so it can learn to release holds that are far below.
+        """
+        vals: list[float] = []
+        for hold in [self.state.left_hand, self.state.right_hand, self.state.left_foot, self.state.right_foot]:
+            if hold is not None:
+                vals.append(float((hold.x - pelvis[0]) * 0.6))
+                vals.append(float((hold.y - pelvis[1]) * 0.4))
+            else:
+                vals.append(0.0)
+                vals.append(0.0)
+        return np.array(vals, dtype=np.float32)
+
+    def stale_count(self, pelvis_y: float, threshold: float = -0.8) -> int:
+        """Count contacts whose hold is more than `threshold` metres below the pelvis.
+
+        Used for a penalty signal to discourage holding onto holds that are
+        far below the current body position.
+        """
+        count = 0
+        for hold in [self.state.left_hand, self.state.right_hand, self.state.left_foot, self.state.right_foot]:
+            if hold is not None and (hold.y - pelvis_y) < threshold:
+                count += 1
+        return count
 
     def _find_reachable_hold(self, point: np.ndarray, holds: HoldField, attach_distance: float) -> Hold | None:
         nearby = holds.nearest_holds(float(point[0]), float(point[1]), k=10)

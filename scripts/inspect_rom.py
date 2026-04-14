@@ -25,8 +25,11 @@ if str(SRC) not in sys.path:
 
 from bouldering2d.config import EnvConfig, PlayerConfig
 from bouldering2d.environment.contacts import ContactManager
+from bouldering2d.environment.muscle import MuscleState
 from bouldering2d.environment.player_model import JOINT_LIMITS, JOINT_ORDER, PlayerModel
 from bouldering2d.environment.renderer import RenderContext, Renderer
+
+_FRESH_MUSCLES = MuscleState(fatigue={j: 0.0 for j in JOINT_ORDER})
 
 # How many frames to spend sweeping each joint (min → max).
 SWEEP_FRAMES = 120
@@ -123,6 +126,7 @@ def main() -> None:
             stamina=100.0,
             step_count=frame,
             ascent=0.0,
+            muscle_fatigue=_FRESH_MUSCLES,
         )
 
         # Draw scene directly (bypasses renderer's flip/tick so we can add overlay first)

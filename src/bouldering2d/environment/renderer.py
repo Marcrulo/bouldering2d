@@ -8,6 +8,7 @@ import pygame
 from bouldering2d.config import EnvConfig
 from bouldering2d.environment.contacts import ContactManager
 from bouldering2d.environment.holds import Hold
+from bouldering2d.environment.muscle import MuscleState
 from bouldering2d.environment.player_model import LimbEndpoints, PlayerModel
 
 
@@ -21,6 +22,7 @@ class RenderContext:
     stamina: float
     step_count: int
     ascent: float
+    muscle_fatigue: MuscleState
 
 
 class Renderer:
@@ -72,6 +74,22 @@ class Renderer:
 
         arr = pygame.surfarray.array3d(surface)
         return np.transpose(arr, (1, 0, 2))
+
+    @staticmethod
+    def _fatigue_color(fatigue: float) -> tuple[int, int, int]:
+        """Blue (fresh) → amber (moderate) → red (exhausted)."""
+        f = max(0.0, min(1.0, fatigue))
+        if f < 0.5:
+            t = f * 2.0
+            r = int(80 + t * 120)
+            g = int(100 + t * 60)
+            b = int(160 - t * 120)
+        else:
+            t = (f - 0.5) * 2.0
+            r = int(200 + t * 20)
+            g = int(160 - t * 120)
+            b = int(40 - t * 10)
+        return (r, g, b)
 
     def _draw_scene(self, surface: pygame.Surface, ctx: RenderContext) -> None:
         surface.fill((243, 236, 220))
@@ -150,22 +168,34 @@ class Renderer:
         lf = wp_to_px(float(l_foot_world[0]), float(l_foot_world[1]))
         rf = wp_to_px(float(r_foot_world[0]), float(r_foot_world[1]))
 
-        pygame.draw.line(surface, (24, 26, 32), pelvis, chest, 5)
-        pygame.draw.line(surface, (24, 26, 32), chest, neck_base, 5)
-        pygame.draw.line(surface, (24, 26, 32), neck_base, head, 4)
+        f = ctx.muscle_fatigue.fatigue
+        fc = self._fatigue_color
 
-        pygame.draw.line(surface, (24, 26, 32), neck_base, le, 4)
-        pygame.draw.line(surface, (24, 26, 32), le, lh, 4)
-        pygame.draw.line(surface, (24, 26, 32), neck_base, re, 4)
-        pygame.draw.line(surface, (24, 26, 32), re, rh, 4)
+        pygame.draw.line(surface, fc(f["spine"]),       pelvis,    chest,    5)
+        pygame.draw.line(surface, fc(f["spine"]),       chest,     neck_base, 5)
+        pygame.draw.line(surface, fc(f["neck"]),        neck_base, head,     4)
 
-        pygame.draw.line(surface, (24, 26, 32), pelvis, lk, 4)
-        pygame.draw.line(surface, (24, 26, 32), lk, lf, 4)
-        pygame.draw.line(surface, (24, 26, 32), pelvis, rk, 4)
-        pygame.draw.line(surface, (24, 26, 32), rk, rf, 4)
+        pygame.draw.line(surface, fc(f["l_shoulder"]),  neck_base, le,       4)
+        pygame.draw.line(surface, fc(f["l_elbow"]),     le,        lh,       4)
+        pygame.draw.line(surface, fc(f["r_shoulder"]),  neck_base, re,       4)
+        pygame.draw.line(surface, fc(f["r_elbow"]),     re,        rh,       4)
 
-        for joint in [chest, le, re, lk, rk]:
-            pygame.draw.circle(surface, (36, 38, 45), joint, 4)
+        pygame.draw.line(surface, fc(f["l_hip"]),       pelvis,    lk,       4)
+        pygame.draw.line(surface, fc(f["l_knee"]),      lk,        lf,       4)
+        pygame.draw.line(surface, fc(f["r_hip"]),       pelvis,    rk,       4)
+        pygame.draw.line(surface, fc(f["r_knee"]),      rk,        rf,       4)
+
+        # Joint dots: fatigue-colored ring, dark center
+        for joint, fatigue_val in [
+            (chest, f["spine"]),
+            (le,    f["l_elbow"]),
+            (re,    f["r_elbow"]),
+            (lk,    f["l_knee"]),
+            (rk,    f["r_knee"]),
+        ]:
+            pygame.draw.circle(surface, fc(fatigue_val), joint, 6)
+            pygame.draw.circle(surface, (36, 38, 45), joint, 3)
+
         pygame.draw.circle(surface, (39, 105, 179), head, 10)
 
         for hold in [
@@ -188,6 +218,49 @@ class Renderer:
         for idx, line in enumerate(hud):
             text = font.render(line, True, (20, 20, 20))
             surface.blit(text, (14, 12 + idx * 25))
+
+        self._draw_fatigue_panel(surface, ctx)
+
+    def _draw_fatigue_panel(self, surface: pygame.Surface, ctx: RenderContext) -> None:
+        """Vertical fatigue bars for each muscle group, top-right corner."""
+        font = pygame.font.Font(None, 20)
+        f = ctx.muscle_fatigue.fatigue
+        labels = [
+            ("Nk", "neck"),
+            ("Sp", "spine"),
+            ("LS", "l_shoulder"),
+            ("RS", "r_shoulder"),
+            ("LE", "l_elbow"),
+            ("RE", "r_elbow"),
+            ("LH", "l_hip"),
+            ("RH", "r_hip"),
+            ("LK", "l_knee"),
+            ("RK", "r_knee"),
+        ]
+        bar_w = 8
+        bar_h = 55
+        gap = 11
+        total_w = len(labels) * (bar_w + gap) - gap
+        panel_x = self.config.screen_width - total_w - 14
+        panel_y = 12
+
+        for i, (label, joint) in enumerate(labels):
+            x = panel_x + i * (bar_w + gap)
+            fatigue_val = f[joint]
+            color = self._fatigue_color(fatigue_val)
+
+            # Background
+            pygame.draw.rect(surface, (180, 170, 155), pygame.Rect(x, panel_y, bar_w, bar_h))
+            # Fill from bottom
+            fill_h = int(bar_h * fatigue_val)
+            if fill_h > 0:
+                pygame.draw.rect(surface, color,
+                                 pygame.Rect(x, panel_y + bar_h - fill_h, bar_w, fill_h))
+            # Border
+            pygame.draw.rect(surface, (100, 90, 80), pygame.Rect(x, panel_y, bar_w, bar_h), 1)
+            # Label
+            txt = font.render(label, True, (20, 20, 20))
+            surface.blit(txt, (x - 1, panel_y + bar_h + 2))
 
     @staticmethod
     def _solve_two_link(

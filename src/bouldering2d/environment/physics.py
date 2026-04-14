@@ -4,39 +4,63 @@ import numpy as np
 
 from bouldering2d.config import EnvConfig
 from bouldering2d.environment.contacts import ContactManager
-from bouldering2d.environment.player_model import PlayerModel
+from bouldering2d.environment.player_model import LimbEndpoints, PlayerModel
 
 
 class PhysicsEngine:
-    """Speed-oriented kinematics update with persistent gravity."""
+    """Constraint-based climbing physics.
+
+    The pelvis moves under gravity.  When limbs are attached to holds, a spring
+    pulls the pelvis toward the position implied by the kinematic chain:
+
+        pelvis_target_i = hold_i - (endpoint_i - pelvis)
+
+    Bending a limb whose endpoint is attached to an overhead hold shortens the
+    relative offset, raising the constraint target and pulling the pelvis up.
+    Extending the limb lowers the target.  Random joint movements produce no
+    net upward bias — the agent must earn height through correct body mechanics.
+    """
 
     def __init__(self, config: EnvConfig) -> None:
         self.config = config
 
-    def step(self, player: PlayerModel, contacts: ContactManager, torque_effort: float) -> tuple[float, bool]:
+    def step(
+        self,
+        player: PlayerModel,
+        contacts: ContactManager,
+        endpoints: LimbEndpoints,
+    ) -> tuple[float, bool]:
         prev_y = float(player.pelvis[1])
-        support = contacts.state.attached_count()
-        support_center = contacts.support_center(player.pelvis)
 
-        # Temporary strength boost for easier climbing/debug iteration.
-        up_pull = np.array([0.0, 0.0], dtype=np.float32)
-        if support > 0:
-            direction = support_center - player.pelvis
-            up_pull = direction * (3.8 + 0.95 * support)
+        gravity = np.array([0.0, -self.config.gravity], dtype=np.float32)
 
-        gravity_force = np.array([0.0, -self.config.gravity], dtype=np.float32)
-        control_lift = np.array([0.0, min(34.0, torque_effort * 0.13)], dtype=np.float32)
-        support_damping = np.array([0.0, 18.0], dtype=np.float32) if support > 0 else np.zeros(2, dtype=np.float32)
-        grip_boost = np.array([0.0, 5.0 * max(0, support - 1)], dtype=np.float32)
-        lateral_pull = np.array([float(support_center[0] - player.pelvis[0]) * 2.0, 0.0], dtype=np.float32)
+        # Kinematic constraint: compute where the pelvis must be so that each
+        # attached limb endpoint coincides with its hold.
+        targets: list[np.ndarray] = []
+        limb_map = [
+            (contacts.state.left_hand,  endpoints.left_hand),
+            (contacts.state.right_hand, endpoints.right_hand),
+            (contacts.state.left_foot,  endpoints.left_foot),
+            (contacts.state.right_foot, endpoints.right_foot),
+        ]
+        for hold, endpoint in limb_map:
+            if hold is not None:
+                rel_offset = endpoint - player.pelvis
+                hold_pos = np.array([hold.x, hold.y], dtype=np.float32)
+                targets.append(hold_pos - rel_offset)
 
-        acceleration = gravity_force + up_pull + control_lift + support_damping + grip_boost + lateral_pull
+        if targets:
+            pelvis_target = np.mean(targets, axis=0).astype(np.float32)
+            spring_force = (pelvis_target - player.pelvis) * self.config.constraint_spring
+            acceleration = gravity + spring_force
+        else:
+            acceleration = gravity
+
         player.update_pelvis(acceleration=acceleration, dt=self.config.dt)
 
-        floor_y = -2.0
         fell = False
-        if player.pelvis[1] < floor_y:
-            player.pelvis[1] = floor_y
+        if player.pelvis[1] < -2.0:
+            player.pelvis[1] = -2.0
             player.pelvis_velocity[:] = 0.0
             fell = True
 
