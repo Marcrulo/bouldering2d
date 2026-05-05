@@ -51,23 +51,9 @@ class MuscleModel:
         return base * angle_mult * (1.0 - fatigue_penalty)
 
     def step(self, joint_torques: dict, dt: float) -> None:
-        """
-        Update per-muscle fatigue.
-
-        Accumulation (when working hard):
-            fatigue += fatigue_rate * normalized_effort * dt
-
-        Recovery (when near-idle):
-            fatigue -= recovery_rate * fatigue * dt   (exponential decay)
-        """
         for j in JOINT_ORDER:
             torque_mag = abs(joint_torques[j])
             base_scale = self.config.torque_scales[j]
             normalized_effort = torque_mag / base_scale if base_scale > 0 else 0.0
-
-            if normalized_effort >= self.config.rest_threshold:
-                delta = self.config.fatigue_rate[j] * normalized_effort * dt
-                self.state.fatigue[j] = min(1.0, self.state.fatigue[j] + delta)
-            else:
-                delta = self.config.recovery_rate[j] * self.state.fatigue[j] * dt
-                self.state.fatigue[j] = max(0.0, self.state.fatigue[j] - delta)
+            delta = self.config.fatigue_rate[j] * normalized_effort * dt
+            self.state.fatigue[j] = min(1.0, self.state.fatigue[j] + delta)

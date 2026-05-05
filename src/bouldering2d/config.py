@@ -9,7 +9,7 @@ class EnvConfig:
     screen_height: int = 1200
     wall_width: float = 8.0
     max_holds: int = 1800
-    hold_spacing_y: float = 0.35
+    hold_spacing_y: float = 1.00
     hold_jitter_x: float = 0.8
     hold_size: float = 0.16
     gravity: float = 9.81
@@ -20,6 +20,7 @@ class EnvConfig:
     ascent_target: float = 20.0
     seed: int = 42
     constraint_spring: float = 100.0
+    constraint_damping: float = 8.0
 
 
 @dataclass(slots=True)
@@ -35,8 +36,8 @@ class PlayerConfig:
     joint_torque_scale: float = 5.0
     joint_damping: float = 0.92
     pelvis_drag: float = 0.92
-    attach_radius: float = 0.28
-    contact_release_dist: float = 2.0
+    attach_radius: float = 0.45
+    contact_release_dist: float = 0.6      # release when limb drifts >0.6m from hold (was 2.0)
 
 
 @dataclass(slots=True)
@@ -99,26 +100,35 @@ class StaminaConfig:
 
 @dataclass(slots=True)
 class RewardConfig:
-    ascent_weight: float = 6.0
-    energy_penalty_weight: float = 0.02
+    ascent_weight: float = 20.0            # dominant signal — even tiny dy must beat idle
+    energy_penalty_weight: float = 0.002   # small — prevents thrashing, doesn't dominate
     fall_penalty: float = 25.0
-    contact_bonus: float = 0.03
-    idle_penalty: float = 0.002
-    stale_contact_penalty: float = 0.005  # per stale contact per step
+    contact_bonus: float = 0.01            # one-time per new grip
+    holding_bonus: float = 0.005           # tiny — just enough to prefer holding over instant release
+    idle_penalty: float = 0.002            # per step with zero contacts
+    stale_contact_penalty: float = 0.02    # per stale contact per step — forces releasing low holds
+    stale_threshold: float = -0.5          # hold this far below pelvis counts as stale
+    reach_shaping_weight: float = 0.05     # potential-based: reward moving free limbs toward holds
 
 
 @dataclass(slots=True)
 class TrainingConfig:
-    total_timesteps: int = 300_000
-    eval_interval: int = 10_000
-    eval_episodes: int = 2
-    checkpoint_interval: int = 25_000
+    total_timesteps: int = 3_000_000
+    eval_interval: int = 50_000
+    eval_episodes: int = 5
+    checkpoint_interval: int = 100_000
     learning_rate: float = 3e-4
-    n_steps: int = 2048
-    batch_size: int = 128
+    n_steps: int = 1024
+    batch_size: int = 256
+    n_epochs: int = 4                   # was SB3 default 10 — 640 updates/rollout is too many
     gamma: float = 0.99
+    gae_lambda: float = 0.97            # was SB3 default 0.95 — better credit assignment over 1200-step episodes
+    clip_range: float = 0.2
+    vf_coef: float = 0.5
+    ent_coef: float = 0.01              # entropy bonus — encourages exploration
     tensorboard_log_dir: str = "data/logs"
     checkpoint_dir: str = "data/checkpoints"
     video_dir: str = "data/videos"
     seed: int = 42
+    n_envs: int = 16
     policy_kwargs: dict = field(default_factory=lambda: {"net_arch": [256, 256]})

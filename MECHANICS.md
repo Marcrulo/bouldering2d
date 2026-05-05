@@ -46,9 +46,9 @@ Each joint receives a torque action from the policy each step.
 
 | Parameter           | Config key            | Default | Effect                                         |
 |---------------------|-----------------------|---------|------------------------------------------------|
-| Torque scale        | `joint_torque_scale`  | 5.0     | Multiplies raw policy action (range −1…1)      |
+| Torque scale        | `torque_scales` (per-joint) | neck 1.5 / spine 4.0 / shoulder 3.5 / elbow 3.0 / hip 7.0 / knee 6.5 | Per-joint max torque in `MuscleConfig` |
 | Joint damping       | `joint_damping`       | 0.92    | Velocity multiplier per step (1.0 = no damping)|
-| Pelvis drag         | `pelvis_drag`         | 0.85    | Pelvis velocity multiplier per step            |
+| Pelvis drag         | `pelvis_drag`         | 0.92    | Pelvis velocity multiplier per step            |
 
 ---
 
@@ -58,12 +58,9 @@ Implemented in `physics.py`. The pelvis is the only mass point — joint positio
 
 ### Forces applied each step
 
-1. **Gravity** — constant downward force: `gravity = 9.81 m/s²`
-2. **Up-pull** — when any limb is attached, a force pulls the pelvis toward the centroid of all attached holds: `direction × (3.8 + 0.95 × num_attached)`
-3. **Control lift** — effort from joint torques generates a small upward assist: `min(34.0, total_effort × 0.13)`
-4. **Support damping** — extra upward damping of 18 m/s² when at least one limb is attached
-5. **Grip boost** — additional 5 m/s² upward per extra attachment beyond the first
-6. **Lateral pull** — gentle horizontal correction toward the support centroid: `Δx × 2.0`
+1. **Gravity** — constant downward acceleration: `9.81 m/s²`
+2. **Constraint spring** — when limbs are attached, a spring pulls the pelvis toward the position implied by the kinematic chain: `spring_force = (pelvis_target − pelvis) × constraint_spring`. `pelvis_target` is the mean of all per-attachment targets, where each target is `hold_pos − (endpoint − pelvis)`. Bending a limb whose endpoint is on an overhead hold shortens the offset, raising the target and pulling the pelvis up. Random flailing produces no net upward force — height must be earned through deliberate body mechanics.
+3. **Constraint damping** — `damping_force = −pelvis_velocity × constraint_damping` applied alongside the spring when attached. Default `constraint_damping = 8.0`.
 
 ### Fall condition
 
@@ -77,14 +74,14 @@ The policy outputs 4 grip actions (left hand, right hand, left foot, right foot)
 
 | Command range | Behaviour                                |
 |---------------|------------------------------------------|
-| < −0.4        | Release: detach from current hold        |
-| −0.4 … 0.4   | Hold: keep current attachment, no search |
-| > 0.4         | Grab: try to attach to the nearest hold  |
+| < −0.3        | Release: detach from current hold        |
+| −0.3 … 0.3   | Hold: keep current attachment, no search |
+| > 0.3         | Grab: try to attach to the nearest hold  |
 
-Distances are derived from `attach_radius` (default `0.22 m`):
-
-- **Attach threshold**: `attach_radius × 0.7` — limb end-point must be within this to grab
-- **Auto-release threshold**: `attach_radius × 1.2` — if an attached limb drifts beyond this, the hold is released
+| Parameter              | Config key               | Default | Effect                                              |
+|------------------------|--------------------------|---------|-----------------------------------------------------|
+| Attach radius          | `attach_radius`          | 0.45 m  | Limb end-point must be within this distance to grab |
+| Auto-release distance  | `contact_release_dist`   | 0.60 m  | If attached limb drifts beyond this, hold released  |
 
 ---
 
@@ -94,47 +91,70 @@ Holds are generated procedurally and scroll with the climber.
 
 | Parameter       | Config key          | Default | Effect                              |
 |-----------------|---------------------|---------|-------------------------------------|
-| Spacing (y)     | `hold_spacing_y`    | 0.35 m  | Vertical density of hold rows       |
+| Spacing (y)     | `hold_spacing_y`    | 1.00 m  | Vertical density of hold rows       |
 | X jitter        | `hold_jitter_x`     | 0.8     | Horizontal spread around wall centre|
 | Hold size       | `hold_size`         | 0.16 m  | Visual radius (does not affect grip) |
-| Holds per row   | —                   | 8–13    | Sampled uniformly each row          |
+| Holds per row   | —                   | 3–5     | Sampled uniformly each row          |
 
 A start cluster of 6 holds is always placed symmetrically within reach of the starting position.
 
 ---
 
-## Stamina
+## Muscle Fatigue
 
-Stamina starts at `100.0` and drains each step. When it hits `0.0` the episode ends.
+Each joint has an independent fatigue value in `[0.0, 1.0]` (0 = fresh, 1 = exhausted). Fatigue only accumulates within an episode — `recovery_rate` exists in `MuscleConfig` but is not applied during `step()`.
 
-Drain formula (per second):
-
+Accumulation per step:
 ```
-drain = base_drain_per_sec
-      + effort × movement_coeff
-      + max(0, 2 − attachments) × tension_coeff × 10
+fatigue[j] += fatigue_rate[j] × normalized_effort[j] × dt
 ```
 
-| Parameter          | Config key            | Default |
-|--------------------|-----------------------|---------|
-| Base drain/sec     | `base_drain_per_sec`  | 0.65    |
-| Movement cost      | `movement_coeff`      | 0.09    |
-| Tension cost       | `tension_coeff`       | 0.06    |
-| Fall penalty       | `fall_penalty`        | 8.0     |
+where `normalized_effort = |applied_torque| / torque_scale`.
 
-Tension cost increases when fewer than 2 limbs are attached (hanging by one limb is costly).
+High fatigue reduces the effective torque a muscle can produce:
+```
+effective_torque_scale = torque_scale × angle_multiplier × (1 − fatigue_penalty_scale × fatigue)
+```
+
+This creates an incentive to **move smart**: minimise unnecessary joint effort to keep muscles fresh for hard moves.
+
+| Parameter             | Config key              | Default                        |
+|-----------------------|-------------------------|--------------------------------|
+| Fatigue rate          | `fatigue_rate`          | 0.03–0.14 per joint            |
+| Fatigue penalty scale | `fatigue_penalty_scale` | 0.60                           |
+
+Fatigue is included in the observation vector (per joint, mapped `[0,1] → [−1,1]`).
 
 ---
 
 ## Reward
 
-| Component       | Formula                                             | Config key               | Default |
-|-----------------|-----------------------------------------------------|--------------------------|---------|
-| Ascent          | `Δy × ascent_weight`                                | `ascent_weight`          | 6.0     |
-| Energy penalty  | `−stamina_spent × energy_penalty_weight`            | `energy_penalty_weight`  | 0.02    |
-| Contact bonus   | `new_contacts × contact_bonus`                      | `contact_bonus`          | 0.03    |
-| Idle penalty    | `−idle_penalty` if `|Δy| < 0.001` and attached     | `idle_penalty`           | 0.002   |
-| Fall penalty    | `−fall_penalty` on fall                             | `fall_penalty`           | 25.0    |
+Multi-component reward computed each step (`RewardConfig`):
+
+```
+reward = ascent_weight × Δy
+       − energy_penalty_weight × stamina_spent
+       + contact_bonus × new_contacts
+       + holding_bonus × attached_count
+       − fall_penalty  (if fell)
+       − idle_penalty  (if 0 contacts)
+       − stale_contact_penalty × stale_count
+       + reach_shaping_weight × (reach_potential_now − reach_potential_prev)
+```
+
+| Component              | Config key                  | Default | Notes                                         |
+|------------------------|-----------------------------|---------|-----------------------------------------------|
+| Ascent weight          | `ascent_weight`             | 20.0    | Dominant signal                               |
+| Energy penalty         | `energy_penalty_weight`     | 0.002   | Penalises total joint effort                  |
+| Contact bonus          | `contact_bonus`             | 0.01    | One-time per new grip                         |
+| Holding bonus          | `holding_bonus`             | 0.005   | Per step per attached limb                    |
+| Fall penalty           | `fall_penalty`              | 25.0    | Applied once on fall                          |
+| Idle penalty           | `idle_penalty`              | 0.002   | Per step with zero contacts                   |
+| Stale contact penalty  | `stale_contact_penalty`     | 0.02    | Per step per hold below `stale_threshold`     |
+| Stale threshold        | `stale_threshold`           | −0.5 m  | Hold this far below pelvis counts as stale    |
+| Reach shaping weight   | `reach_shaping_weight`      | 0.05    | Potential-based: reward free limbs toward holds|
+
+---
 
 ---
 

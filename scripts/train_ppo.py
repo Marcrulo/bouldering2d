@@ -11,7 +11,7 @@ import imageio.v2 as imageio
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from tqdm import tqdm
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +21,8 @@ if str(SRC) not in sys.path:
 
 from bouldering2d.config import TrainingConfig
 from bouldering2d.environment.climbing_env import make_env
+
+NORMALIZER_FILENAME = "vec_normalize.pkl"
 
 
 class TqdmCallback(BaseCallback):
@@ -79,12 +81,17 @@ class PeriodicEvalCallback(BaseCallback):
             return True
         self._last_eval_step = self.num_timesteps
 
+        # Save normalizer alongside checkpoint so eval uses correct stats
+        normalizer_path = self.checkpoint_dir / NORMALIZER_FILENAME
+        self.model.get_env().save(str(normalizer_path))
+
         metrics = run_eval(
             model=self.model,
             episodes=self.eval_episodes,
             render_mode=self.eval_render_mode,
             save_video=self.save_eval_video,
             video_path=self.video_dir / f"eval_{self.num_timesteps}.mp4",
+            normalizer_path=normalizer_path,
         )
         mean_reward = metrics["mean_reward"]
         self.logger.record("eval/mean_reward", mean_reward)
@@ -100,7 +107,6 @@ class PeriodicEvalCallback(BaseCallback):
         return True
 
     def _on_training_start(self) -> None:
-        # Align eval scheduling when resuming so we keep evaluating every eval_interval steps.
         self._last_eval_step = (self.num_timesteps // self.eval_interval) * self.eval_interval
 
 
@@ -117,37 +123,57 @@ def find_latest_checkpoint(checkpoint_dir: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-def run_eval(model: PPO, episodes: int, render_mode: str, save_video: bool, video_path: Path) -> dict[str, float]:
-    env = make_env(render_mode=render_mode)
+def run_eval(
+    model: PPO,
+    episodes: int,
+    render_mode: str,
+    save_video: bool,
+    video_path: Path,
+    normalizer_path: Path | None = None,
+) -> dict[str, float]:
+    effective_render_mode = "rgb_array" if save_video else render_mode
+    vec_env = DummyVecEnv([lambda: make_env(render_mode=effective_render_mode)])
+
+    if normalizer_path is not None and Path(normalizer_path).exists():
+        vec_env = VecNormalize.load(str(normalizer_path), vec_env)
+        vec_env.training = False
+        vec_env.norm_reward = False
+
     rewards = []
     ascents = []
     frames: list[np.ndarray] = []
 
     for _ in range(episodes):
-        obs, _ = env.reset()
-        terminated = False
-        truncated = False
+        obs = vec_env.reset()
+        done = np.array([False])
         total_reward = 0.0
-        ascent = 0.0
-        while not (terminated or truncated):
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
-            frame = env.render()
-            if save_video and isinstance(frame, np.ndarray):
-                frames.append(frame)
-            total_reward += reward
-            ascent = max(ascent, float(info.get("ascent", 0.0)))
-        rewards.append(total_reward)
-        ascents.append(ascent)
+        ep_ascent = 0.0
 
-    env.close()
+        while not done[0]:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, done, info = vec_env.step(action)
+            total_reward += float(reward[0])
+            ep_ascent = max(ep_ascent, float(info[0].get("ascent", 0.0)))
+
+            if render_mode is not None:
+                frame = vec_env.render()
+                if save_video and isinstance(frame, np.ndarray):
+                    frames.append(frame)
+                elif save_video and isinstance(frame, list) and frame:
+                    frames.append(frame[0])
+
+        rewards.append(total_reward)
+        ascents.append(ep_ascent)
+
+    vec_env.close()
+
     if save_video and frames:
         video_path.parent.mkdir(parents=True, exist_ok=True)
-        imageio.mimwrite(video_path, frames, fps=30)
+        imageio.mimwrite(str(video_path), frames, fps=30)
 
     return {
-        "mean_reward": float(sum(rewards) / max(1, len(rewards))),
-        "mean_ascent": float(sum(ascents) / max(1, len(ascents))),
+        "mean_reward": float(np.mean(rewards)),
+        "mean_ascent": float(np.mean(ascents)),
     }
 
 
@@ -156,6 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--total-timesteps", type=int, default=TrainingConfig().total_timesteps)
     parser.add_argument("--eval-interval", type=int, default=TrainingConfig().eval_interval)
     parser.add_argument("--eval-episodes", type=int, default=TrainingConfig().eval_episodes)
+    parser.add_argument("--n-envs", type=int, default=TrainingConfig().n_envs)
     parser.add_argument("--eval-render-mode", choices=["human", "rgb_array"], default="human")
     parser.add_argument("--save-eval-video", action="store_true")
     parser.add_argument("--run-name", type=str, default="ppo_run")
@@ -168,6 +195,7 @@ def main() -> None:
         total_timesteps=args.total_timesteps,
         eval_interval=args.eval_interval,
         eval_episodes=args.eval_episodes,
+        n_envs=args.n_envs,
     )
 
     checkpoint_dir = ROOT / cfg.checkpoint_dir / args.run_name
@@ -180,22 +208,42 @@ def main() -> None:
     with (checkpoint_dir / "config.json").open("w", encoding="utf-8") as fp:
         json.dump(asdict(cfg), fp, indent=2)
 
-    env = DummyVecEnv([lambda: make_env(render_mode=None, seed=cfg.seed)])
+    def _make_env(seed: int):
+        def _init():
+            return make_env(render_mode=None, seed=seed)
+        return _init
+
+    env_fns = [_make_env(cfg.seed + i) for i in range(cfg.n_envs)]
+    env = SubprocVecEnv(env_fns) if cfg.n_envs > 1 else DummyVecEnv(env_fns)
+
+    normalizer_path = checkpoint_dir / NORMALIZER_FILENAME
     latest_checkpoint = find_latest_checkpoint(checkpoint_dir)
     is_resumed_run = latest_checkpoint is not None
 
-    if latest_checkpoint is not None:
+    if is_resumed_run and normalizer_path.exists():
         print(f"Resuming from checkpoint: {latest_checkpoint}")
+        env = VecNormalize.load(str(normalizer_path), env)
+        model = PPO.load(str(latest_checkpoint), env=env, device="cpu")
+        model.tensorboard_log = str(log_dir)
+    elif is_resumed_run:
+        print(f"Resuming from checkpoint: {latest_checkpoint} (no normalizer found — starting fresh normalizer)")
+        env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
         model = PPO.load(str(latest_checkpoint), env=env, device="cpu")
         model.tensorboard_log = str(log_dir)
     else:
+        env = VecNormalize(env, norm_obs=True, norm_reward=True, clip_obs=10.0)
         model = PPO(
             "MlpPolicy",
             env,
             learning_rate=cfg.learning_rate,
             n_steps=cfg.n_steps,
             batch_size=cfg.batch_size,
+            n_epochs=cfg.n_epochs,
             gamma=cfg.gamma,
+            gae_lambda=cfg.gae_lambda,
+            clip_range=cfg.clip_range,
+            vf_coef=cfg.vf_coef,
+            ent_coef=cfg.ent_coef,
             tensorboard_log=str(log_dir),
             policy_kwargs=cfg.policy_kwargs,
             verbose=0,
@@ -236,6 +284,7 @@ def main() -> None:
         print("Target timesteps already reached; skipping training.")
 
     model.save(checkpoint_dir / "ppo_final.zip")
+    env.save(str(normalizer_path))
     env.close()
 
 

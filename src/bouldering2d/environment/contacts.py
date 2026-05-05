@@ -94,8 +94,8 @@ class ContactManager:
         vals: list[float] = []
         for hold in [self.state.left_hand, self.state.right_hand, self.state.left_foot, self.state.right_foot]:
             if hold is not None:
-                vals.append(float((hold.x - pelvis[0]) * 0.6))
-                vals.append(float((hold.y - pelvis[1]) * 0.4))
+                vals.append(float((hold.x - pelvis[0]) * 0.5))
+                vals.append(float((hold.y - pelvis[1]) * 0.5))
             else:
                 vals.append(0.0)
                 vals.append(0.0)

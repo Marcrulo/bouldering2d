@@ -52,7 +52,8 @@ class PhysicsEngine:
         if targets:
             pelvis_target = np.mean(targets, axis=0).astype(np.float32)
             spring_force = (pelvis_target - player.pelvis) * self.config.constraint_spring
-            acceleration = gravity + spring_force
+            damping_force = -player.pelvis_velocity * self.config.constraint_damping
+            acceleration = gravity + spring_force + damping_force
         else:
             acceleration = gravity
 

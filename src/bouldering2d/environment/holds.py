@@ -60,7 +60,7 @@ class HoldField:
 
         while self._max_generated_y <= y_max and len(self._holds) < self.config.max_holds:
             self._max_generated_y += self.config.hold_spacing_y
-            num_holds = int(self.rng.integers(8, 14))
+            num_holds = int(self.rng.integers(3, 6))
             for _ in range(num_holds):
                 cx = self.config.wall_width * 0.5
                 x = float(

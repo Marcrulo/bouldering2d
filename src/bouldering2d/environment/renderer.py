@@ -19,7 +19,6 @@ class RenderContext:
     holds: list[Hold]
     observed_holds: list[Hold]
     contacts: ContactManager
-    stamina: float
     step_count: int
     ascent: float
     muscle_fatigue: MuscleState
@@ -206,11 +205,10 @@ class Renderer:
         ]:
             if hold is not None:
                 hx, hy = wp_to_px(hold.x, hold.y)
-                pygame.draw.circle(surface, (30, 160, 80), (hx, hy), 10, 2)
+                pygame.draw.circle(surface, (30, 100, 220), (hx, hy), 11, 2)
 
         font = pygame.font.Font(None, 30)
         hud = [
-            f"Stamina: {ctx.stamina:5.1f}",
             f"Height: {ctx.ascent:5.2f}",
             f"Step: {ctx.step_count}",
             f"Contacts: {ctx.contacts.state.attached_count()}",
